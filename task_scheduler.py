@@ -31,18 +31,50 @@ def build_graph(tasks):
     return G
 
 
-def validate_graph(G):
+
+def validate_graph(G: nx.DiGraph):
+    """
+    Validates that G is a DAG and computes the critical path using node 'duration'.
+    Returns: (expected_runtime, critical_path [list of node names])
+    Raises: ValueError on cycles.
+    """
     if not nx.is_directed_acyclic_graph(G):
         raise ValueError("Cycle detected in task dependencies")
 
-    critical_path = nx.dag_longest_path(G, weight='duration')
-    expected_runtime = sum(G.nodes[n]['duration'] for n in critical_path)
-    return expected_runtime, critical_path
+    topo = list(nx.topological_sort(G))
+    earliest_finish = {}
+    parent = {}
 
+    for u in topo:
+        preds = list(G.predecessors(u))
+        if preds:
+            # predecessor that finishes latest
+            p = max(preds, key=lambda x: earliest_finish[x])
+            parent[u] = p
+            earliest_start = earliest_finish[p]
+        else:
+            parent[u] = None
+            earliest_start = 0
+        earliest_finish[u] = earliest_start + G.nodes[u]['duration']
+
+    # end of critical path = node with max earliest_finish
+    end = max(earliest_finish, key=lambda n: earliest_finish[n])
+    expected_runtime = earliest_finish[end]
+
+    # backtrack to build path
+    path = []
+    cur = end
+    while cur is not None:
+        path.append(cur)
+        cur = parent[cur]
+    path.reverse()
+
+    return expected_runtime, path
 
 def run_tasks(tasks, G):
     done = set()
     futures = {}
+    task_timings = {}
     start_time = time.perf_counter()
 
     with ThreadPoolExecutor() as executor:
@@ -50,8 +82,17 @@ def run_tasks(tasks, G):
             deps = tasks[task]['deps']
             for dep in deps:
                 futures[dep].result()
+
+            t_start = time.perf_counter()
             print(f"[+] Running {task} for {tasks[task]['duration']}s")
             time.sleep(tasks[task]['duration'])
+            t_end = time.perf_counter()
+
+            task_timings[task] = {
+                "start": t_start - start_time,
+                "end": t_end - start_time,
+            }
+
             print(f"[-] Finished {task}")
             done.add(task)
 
@@ -62,6 +103,13 @@ def run_tasks(tasks, G):
             f.result()
 
     end_time = time.perf_counter()
+
+    # Gantt-like output
+    print("\nGantt Summary (all times in seconds):")
+    for task, timing in sorted(task_timings.items(), key=lambda x: x[1]["start"]):
+        duration = timing["end"] - timing["start"]
+        print(f"{task:<10} | start: {timing['start']:.2f}  end: {timing['end']:.2f}  duration: {duration:.2f}")
+
     return end_time - start_time
 
 
